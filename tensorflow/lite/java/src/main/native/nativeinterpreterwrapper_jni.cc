@@ -16,6 +16,8 @@ limitations under the License.
 #include <jni.h>
 #include <stdio.h>
 #include <time.h>
+#include <csignal>
+#include <setjmp.h>
 
 #include <vector>
 
@@ -33,6 +35,14 @@ using tflite::jni::BufferErrorReporter;
 using tflite::jni::ThrowException;
 
 namespace {
+  
+static jmp_buf jumpflg;
+JNIEnv* sigEnv;
+void handler(int sig) {
+    signal(sig, SIG_DFL);
+    ThrowException(sigEnv, kIllegalArgumentException, "Internal error [catched].");
+    longjmp (jumpflg, 1);
+}
 
 tflite_api_dispatcher::Interpreter* convertLongToInterpreter(JNIEnv* env,
                                                              jlong handle) {
@@ -431,12 +441,15 @@ JNIEXPORT void JNICALL Java_org_tensorflow_lite_NativeInterpreterWrapper_run(
   BufferErrorReporter* error_reporter =
       convertLongToErrorReporter(env, error_handle);
   if (error_reporter == nullptr) return;
-
-  if (interpreter->Invoke() != kTfLiteOk) {
-    ThrowException(env, kIllegalArgumentException,
-                   "Internal error: Failed to run on the given Interpreter: %s",
-                   error_reporter->CachedErrorMessage());
-    return;
+  signal(SIGSEGV, handler);
+  sigEnv = env;
+  if (!setjmp(jumpflg)) {
+    if (interpreter->Invoke() != kTfLiteOk) {
+      ThrowException(env, kIllegalArgumentException,
+                     "Internal error: Failed to run on the given Interpreter: %s",
+                     error_reporter->CachedErrorMessage());
+      return;
+    }
   }
 }
 
